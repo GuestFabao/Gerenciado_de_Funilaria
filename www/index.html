@@ -1788,28 +1788,34 @@ async function carregarConfigEmpresa() {
 }
 
 async function carregarHistorico() {
-  const rows=await sbGet('orcamentos','&limit=200');
-  if(rows&&rows.length){
-    historico=rows.map(r=>({
-      id:r.id, _ts:new Date(r.created_at).getTime(),
-      num:r.numero, data:r.data, status:r.status||'aguardando',
-      cliente:r.cliente_nome, tel:r.cliente_tel,
-      veiculo:`${r.veiculo_modelo||''} ${r.veiculo_ano||''}`.trim(),
-      total:r.total, pdf_url:r.pdf_url,
-      _dados:{
-        num:r.numero,data:r.data,
-        cliente:{nome:r.cliente_nome,tel:r.cliente_tel},
-        veiculo:{modelo:r.veiculo_modelo,ano:r.veiculo_ano,cor:r.veiculo_cor,placa:r.veiculo_placa},
-        servicos:r.servicos||[],
-        subtotal:r.subtotal,desconto:r.desconto,total:r.total,
-        prazo:r.prazo,pagamento:r.pagamento,obs:r.observacoes,
-        validade:r.validade||30,garantia:r.garantia||'',termos:r.termos||'',
-        empresa:{...config}
-      }
-    }));
-    const nums=historico.map(h=>parseInt(h.num)||0);
-    if(nums.length){const mx=Math.max(...nums);if(mx>=numOrc){numOrc=mx+1;DB.set('fpNumOrc',numOrc);}}
-  } else { historico=[]; }
+  // Seleciona explicitamente todas as colunas para garantir que status vem correto
+  try {
+    const r = await fetch(`${SUPA_URL}/rest/v1/orcamentos?select=*&order=created_at.desc&limit=200`, {
+      headers: getHeaders()
+    });
+    const rows = r.ok ? await r.json() : [];
+    if(rows && rows.length) {
+      historico = rows.map(r=>({
+        id:r.id, _ts:new Date(r.created_at).getTime(),
+        num:r.numero, data:r.data, status:r.status||'aguardando',
+        cliente:r.cliente_nome, tel:r.cliente_tel,
+        veiculo:`${r.veiculo_modelo||''} ${r.veiculo_ano||''}`.trim(),
+        total:r.total, pdf_url:r.pdf_url,
+        _dados:{
+          num:r.numero, data:r.data,
+          cliente:{nome:r.cliente_nome, tel:r.cliente_tel},
+          veiculo:{modelo:r.veiculo_modelo, ano:r.veiculo_ano, cor:r.veiculo_cor, placa:r.veiculo_placa},
+          servicos:r.servicos||[],
+          subtotal:r.subtotal, desconto:r.desconto, total:r.total,
+          prazo:r.prazo, pagamento:r.pagamento, obs:r.observacoes,
+          validade:r.validade||30, garantia:r.garantia||'', termos:r.termos||'',
+          empresa:{...config}
+        }
+      }));
+      const nums = historico.map(h=>parseInt(h.num)||0);
+      if(nums.length){const mx=Math.max(...nums);if(mx>=numOrc){numOrc=mx+1;DB.set('fpNumOrc',numOrc);}}
+    } else { historico=[]; }
+  } catch(e) { historico=[]; }
   renderHistorico();
 }
 
@@ -2292,9 +2298,11 @@ const STATUS_COLORS={aguardando:'#F57F17',aprovado:'#2E7D32',reprovado:'#C62828'
 const STATUS_BG={aguardando:'#FFF8E1',aprovado:'#E8F5E9',reprovado:'#FFEBEE',execucao:'#E3F2FD',concluido:'#F3E5F5'};
 
 async function atualizarStatus(id, novoStatus) {
-  await sbUpdate('orcamentos',id,{status:novoStatus});
-  const h=historico.find(x=>x.id===id);
-  if(h) h.status=novoStatus;
+  const ok = await sbUpdate('orcamentos', id, {status: novoStatus});
+  const h = historico.find(x => x.id === id);
+  if (h) h.status = novoStatus;
+  if (ok) toast('Status atualizado: ' + STATUS_LABELS[novoStatus]);
+  else toast('Erro ao salvar status. Verifique a conexão.');
 }
 
 // ── HISTÓRICO ──
@@ -2546,22 +2554,27 @@ function abrirModalCliente(id){
       <div class="section" style="margin:0 0 12px">
         <div class="section-header"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>Dados</div>
         <div class="section-body">
-          <div style="display:flex;justify-content:space-between;margin-bottom:8px">
-            <span style="color:var(--texto2);font-size:13px">Telefone</span>
-            <span style="font-weight:600;font-size:13px">${c.telefone||'—'}</span>
-          </div>
-          <div style="display:flex;justify-content:space-between;margin-bottom:8px">
-            <span style="color:var(--texto2);font-size:13px">Orçamentos</span>
-            <span style="font-weight:600;font-size:13px">${orcsCliente.length}</span>
-          </div>
-          <div style="display:flex;justify-content:space-between">
-            <span style="color:var(--texto2);font-size:13px">Total gasto</span>
-            <span style="font-weight:700;font-size:14px;color:var(--azul)">${fmtBRL(totalCliente)}</span>
+          <div class="field"><label>Nome</label>
+            <input type="text" id="editClienteNome" value="${c.nome||''}" /></div>
+          <div class="field"><label>Telefone</label>
+            <input type="tel" id="editClienteTel" value="${c.telefone||''}" /></div>
+          <div style="display:flex;gap:8px;margin-top:4px">
+            <button onclick="salvarEdicaoCliente('${c.id}')"
+              style="flex:1;padding:11px;background:var(--azul);color:white;border:none;border-radius:10px;font-size:14px;font-weight:600;cursor:pointer">
+              💾 Salvar
+            </button>
+            <button onclick="deletarCliente('${c.id}','${(c.nome||'').replace(/'/g,"\\'")}')"
+              style="padding:11px 16px;background:#FFEBEE;color:#C62828;border:none;border-radius:10px;font-size:14px;font-weight:600;cursor:pointer">
+              🗑️ Excluir
+            </button>
           </div>
         </div>
       </div>
-      <div style="font-weight:700;font-size:13px;color:var(--azul-escuro);margin-bottom:8px">Histórico de orçamentos</div>
-      ${orcsCliente.length?orcsCliente.map(h=>`
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+        <div style="font-weight:700;font-size:13px;color:var(--azul-escuro)">Orçamentos (${orcsCliente.length})</div>
+        <div style="font-weight:700;font-size:13px;color:var(--azul)">${fmtBRL(totalCliente)}</div>
+      </div>
+      ${orcsCliente.length ? orcsCliente.map(h=>`
         <div style="background:white;border:1.5px solid var(--borda);border-radius:10px;padding:12px;margin-bottom:8px">
           <div style="display:flex;justify-content:space-between;align-items:center">
             <div>
@@ -2571,10 +2584,40 @@ function abrirModalCliente(id){
             <span style="font-weight:700;color:var(--azul)">${fmtBRL(h.total)}</span>
           </div>
           <span class="status-badge status-${h.status||'aguardando'}">${STATUS_LABELS[h.status||'aguardando']}</span>
-        </div>`).join(''):'<div style="text-align:center;color:var(--texto2);font-size:13px;padding:20px">Nenhum orçamento</div>'}
+        </div>`).join('')
+      : '<div style="text-align:center;color:var(--texto2);font-size:13px;padding:20px">Nenhum orçamento</div>'}
     </div>`;
   document.getElementById('modalCliente').classList.add('open');
 }
+
+async function salvarEdicaoCliente(id) {
+  const nome = document.getElementById('editClienteNome').value.trim();
+  const tel  = document.getElementById('editClienteTel').value.trim();
+  if (!nome) { toast('Digite o nome do cliente'); return; }
+  mostrarLoader(true);
+  const ok = await sbUpdate('clientes', id, {nome, telefone: tel});
+  if (ok) {
+    const c = clientes.find(x => x.id === id);
+    if (c) { c.nome = nome; c.telefone = tel; }
+    document.getElementById('modalClienteNome').textContent = nome;
+    toast('Cliente atualizado!');
+  } else { toast('Erro ao salvar. Verifique a conexão.'); }
+  mostrarLoader(false);
+}
+
+async function deletarCliente(id, nome) {
+  if (!confirm(`Excluir o cliente "${nome}"? Os orçamentos dele não serão apagados.`)) return;
+  mostrarLoader(true);
+  const ok = await sbDelete('clientes', id);
+  if (ok) {
+    clientes = clientes.filter(c => c.id !== id);
+    fecharModalCliente();
+    renderClientes();
+    toast('Cliente removido.');
+  } else { toast('Erro ao excluir.'); }
+  mostrarLoader(false);
+}
+
 function fecharModalCliente(){document.getElementById('modalCliente').classList.remove('open');}
 
 // ── CATÁLOGO ──
